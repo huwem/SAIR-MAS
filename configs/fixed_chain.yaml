@@ -1,0 +1,58 @@
+# Fixed chain topology baseline config (FrameworkConfig level)
+# Usage: python -m mas_topo experiment configs/fixed_chain.yaml -l 5
+
+name: "fixed_chain"
+description: "Fixed chain topology baseline"
+
+llm:
+  provider: openai_compat
+  model: deepseek-v4-flash
+  api_key: ${OPENAI_API_KEY}
+  base_url: ${OPENAI_BASE_URL}
+  temperature: 0.3
+  max_tokens: 8000
+  json_mode: true
+
+  thinking_budget: 16000
+agents:
+  - type: LLMAgent
+    name: Manager
+    role: Workflow Orchestrator
+    system_prompt: |
+      You are Manager, the Workflow Orchestrator.
+      Coordinate the workflow and determine task completion.
+    output_format: json
+
+  - type: LLMAgent
+    name: Developer
+    role: Code Developer
+    system_prompt: |
+      You are Developer, the Code Developer.
+      Write complete, runnable Python code.
+    output_format: json
+
+  - type: LLMAgent
+    name: Tester
+    role: Code Tester
+    system_prompt: |
+      You are Tester, the Code Tester.
+      Verify the code and report results.
+    output_format: json
+
+topology:
+  strategy: fixed
+  pattern: chain
+  manager_name: Manager
+
+routing:
+  strategy: broadcast
+  memory_truncate: 3000
+  manager_name: Manager
+
+decision:
+  strategy: manager
+  manager_name: Manager
+  max_rounds: 10
+
+max_rounds: 10
+verbose: true

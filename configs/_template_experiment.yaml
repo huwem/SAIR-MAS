@@ -1,0 +1,254 @@
+# 使用方法：
+#   python -m mas_topo experiment <本文件路径> [--limit N] [--batch-size B] [--model MODEL] [--output-dir DIR] [--log-level LEVEL]
+#
+# 示例：
+#   python -m mas_topo experiment configs/_template_experiment.yaml --limit 10 --batch-size 3 --model deepseek-v4-flash --log-level warning
+#
+# 结果可视化：
+#   python visualization/visualize_metrics.py --metrics <结果目录>/metrics.jsonl --output-dir <结果目录>/figures
+#
+# 实验级配置模板 —— PragmaMAS-P2P 去中心化言谓驱动共识示例
+# 使用方式:
+#   python -m mas_topo experiment configs/_template_experiment.yaml
+#   python examples/run_experiment.py configs/_template_experiment.yaml -l 5
+
+# ──────────────────────────────────────────────────────────────
+# 实验元信息（可选）
+# ──────────────────────────────────────────────────────────────
+name: "my_experiment"
+description: "A PragmaMAS-P2P decentralized illocution-driven experiment"
+
+# ──────────────────────────────────────────────────────────────
+# 数据集配置（必填）
+# ──────────────────────────────────────────────────────────────
+dataset:
+  # loader: 数据集加载器注册表名
+  #   可用值: humaneval, gsm8k, math, mbpp
+  #   如需自定义数据集，继承 BaseDatasetLoader 并用 @dataset_registry.register 注册
+  loader: humaneval
+
+  # path: 数据集文件路径（相对于项目根目录或绝对路径）
+  path: datasets/humaneval/humaneval-py.jsonl
+
+  # limit: 最多运行的样本数，null 表示全部
+  limit: null
+
+  # offset: 起始偏移量（从第几个样本开始）
+  offset: 0
+
+  # random_offset: 是否随机选择起始偏移
+  random_offset: false
+
+  # seed: 随机种子（random_offset=true 时生效）
+  seed: null
+
+# ──────────────────────────────────────────────────────────────
+# 评估配置（可选，默认 exact_match）
+# ──────────────────────────────────────────────────────────────
+evaluation:
+  # metric: 评估器注册表名
+  #   可用值:
+  #     exact_match    — 字符串/数字精确匹配（适合 GSM8K 等纯数字答案）
+  #     llm_judge      — 大模型评判（适合 MATH/AIME 等复杂推理，先精确匹配再 LLM 二次判断）
+  #     code_execution — 代码执行测试（适合 HumanEval / MBPP）
+  metric: code_execution
+
+  # metric_params: 评估器额外参数
+  metric_params:
+    extract_code: true   # code_execution: 是否从 markdown 提取 Python 代码
+    # llm_judge 示例:
+    #   model: deepseek-v4-flash
+    #   api_key: ${OPENAI_API_KEY}
+    #   base_url: ${OPENAI_BASE_URL}
+    #   temperature: 0.0
+    #   max_tokens: 256
+    # exact_match 示例（仅推荐纯数字答案）:
+    #   extract_number: true
+
+# ──────────────────────────────────────────────────────────────
+# 输出配置（可选）
+# ──────────────────────────────────────────────────────────────
+output:
+  # dir: 输出目录，null 则自动生成带时间戳的目录
+  dir: null
+
+  # formats: 结果导出格式
+  formats: [json, csv]
+
+  # trace: 是否启用过程追踪（每轮 Agent I/O、拓扑、路由）
+  trace: true
+
+# ──────────────────────────────────────────────────────────────
+# 框架配置（必填）—— 多智能体系统的核心
+# ──────────────────────────────────────────────────────────────
+framework:
+
+  # ── LLM 配置 ──
+  llm:
+    # provider: LLM 适配器注册表名
+    #   可用值: openai_compat
+    provider: openai_compat
+
+    # model: 模型名称
+    model: deepseek-v4-flash
+
+    # api_key: API 密钥（推荐通过环境变量 ${OPENAI_API_KEY} 传入）
+    api_key: ${OPENAI_API_KEY}
+
+    # base_url: API 基础 URL（推荐通过环境变量 ${OPENAI_BASE_URL} 传入）
+    base_url: ${OPENAI_BASE_URL}
+
+    # temperature: 采样温度 (0.0~2.0)
+    temperature: 0.3
+
+    # max_tokens: 最大生成 token 数
+    max_tokens: 32000
+
+    # json_mode: 是否启用 OpenAI JSON mode（response_format={type:"json_object"}）
+    json_mode: true
+
+  # ── Agent 配置 ──
+  # 每个 Agent 的字段说明:
+  #   type: Agent 类型注册表名（目前只有 LLMAgent）
+  #   name: Agent 唯一名称
+  #   role: 角色描述
+  #   system_prompt: 系统提示词（覆盖默认角色提示）
+  #   output_format: 输出格式 — "text" 或 "json"
+  #   output_schema: JSON 输出字段定义（可选；未提供时根据 required_output_fields 自动推导）
+  #   required_output_fields: 必填字段列表（Agent 输出验证用）
+  #     可用值: public_content, private_routing, messages, answer, vote_complete, is_complete, next_goal, tool_call 等
+  #   context_fields: 从 context.metadata 注入 prompt 的字段名列表（如 current_answer）
+  #   tools: 工具名称列表（对应 tool_registry，如 python_test）
+  #   memory_limit: 记忆历史截断长度
+  agents:
+    # Coordinator — 协调进度，无特权，可投票但不作为关键角色
+    - type: LLMAgent
+      name: Coordinator
+      role: Coordination Specialist
+      system_prompt: |
+        You are Coordinator, a peer worker. You have NO special privilege.
+        Role Description:
+        Watch the shared ledger, keep collaboration moving, and send short coordination messages to peers.
+
+        Output ONLY a concise and accurate JSON object with:
+        {
+          "private_routing": [
+            {"recipients": ["<agent_name>"], "illocution": "<illocution_category>", "content": "Routed to specific workers for collaboration", "answer_correct": <true|false>}
+          ]
+        }
+
+        Rules:
+        1. Available illocution categories: Directive, Assertive, Commissive, Expressive, Declarative.
+        2. Set answer_correct=true ONLY when the value in the [answer_from_*] section is the correct final answer (vote on the injected current answer, not values quoted in messages).
+        3. Avoid using "All" or broadcasting; list only the minimum recipients needed.
+      output_format: json
+      required_output_fields: [private_routing]
+      context_fields: [current_answer]
+
+    # Developer — 代码实现角色，唯一产出 answer 的 Agent
+    - type: LLMAgent
+      name: Developer
+      role: Code Developer
+      system_prompt: |
+        You are Developer, a peer worker.
+        Role Description:
+        Implement complete, runnable Python functions. Output the current code implementation every round, even if it is a draft or incomplete.
+
+        Output ONLY a concise and accurate JSON object with:
+        {
+          "private_routing": [
+            {"recipients": ["<agent_name>"], "illocution": "<illocution_category>", "content": "Routed to specific workers for collaboration", "answer_correct": <true|false>}
+          ],
+          "answer": "<complete Python code, including any needed imports>"
+        }
+
+        Rules:
+        1. The "answer" must be a complete, runnable Python snippet. Include imports such as "from typing import List" if the function signature uses them.
+        2. Available illocution categories: Directive, Assertive, Commissive, Expressive, Declarative.
+        3. Set answer_correct=true ONLY when the code in the [answer_from_developer] section is your confirmed correct and complete implementation.
+        4. Avoid using "All" or broadcasting; list only the minimum recipients needed.
+      output_format: json
+      required_output_fields: [private_routing, answer]
+      context_fields: [current_answer]
+
+    # Tester — 测试验证角色，关键投票角色之一
+    - type: LLMAgent
+      name: Tester
+      role: Code Tester
+      tools: [python_test]
+      system_prompt: |
+        You are Tester, a peer worker.
+        Role Description:
+        Design and execute test cases, verify code correctness and edge cases, and report review results to peers.
+
+        Output ONLY a concise and accurate JSON object with:
+        {
+          "private_routing": [
+            {"recipients": ["<agent_name>"], "illocution": "<illocution_category>", "content": "Routed to specific workers for collaboration", "answer_correct": <true|false>}
+          ]
+        }
+
+        Rules:
+        1. Available illocution categories: Directive, Assertive, Commissive, Expressive, Declarative.
+        2. Use the python_test tool to actually execute the Developer's code against your test cases. Never claim tests pass without running them.
+        3. Set answer_correct=true ONLY when the code in the [answer_from_developer] section passes all your tests.
+        4. Avoid using "All" or broadcasting; list only the minimum recipients needed.
+      output_format: json
+      required_output_fields: [private_routing]
+      context_fields: [current_answer]
+
+  # ── 拓扑策略配置 ──
+  # 可用策略:
+  #   neighbor — 基于邻居表的拓扑；未指定邻居时默认全连接（推荐 P2P）
+  #   fixed    — 预定义固定拓扑（star, chain, ring, full_connected, tree, mesh, layered, random）
+  #   semantic — 语义匹配拓扑（基于 q_vector/k_vector 的 SentenceTransformer 嵌入相似度）
+  #   cosine   — 余弦相似度拓扑
+  #   manual   — 手动指定邻接矩阵
+  topology:
+    strategy: neighbor
+    # 如需显式指定邻居，可取消注释并修改：
+    # agent_neighbor_map:
+    #   Developer: [Tester]
+    #   Tester: [Developer]
+    # threshold: 0.3          # semantic/cosine: 相似度阈值
+    # max_in_degree: 3        # semantic/cosine: 最大入度
+    # embedding_model: all-MiniLM-L6-v2  # semantic/cosine: 嵌入模型路径
+
+  # ── 路由策略配置 ──
+  # 可用策略:
+  #   self_routing — Agent 通过 private_routing 自主声明语旨和接收者（P2P 推荐）
+  #   broadcast    — 广播路由（全对全通信）
+  #   free_talk    — 显式 to 路由（Worker 间通过 messages[].to 投递）
+  #   semantic     — 语义路由（基于 q_vector/k_vector 匹配）
+  routing:
+    strategy: self_routing
+    neighbor_policy: strict   # strict | filter | permissive
+    memory_truncate: 3000
+
+  # ── 决策策略配置 ──
+  # 可用策略:
+  #   consensus        — 去中心化共识（unanimous / majority / key_roles）
+  #   manager          — Manager Agent 二次调用决定 is_complete/next_goal
+  #   voting           — 多数投票决策
+  #   direct           — 直接取最后一个 Agent 输出
+  #   illocution_termination — 检测语旨化 TASK_COMPLETE 终止信号
+  decision:
+    strategy: consensus
+    consensus_mode: key_roles
+    key_roles: ["Developer", "Tester"]
+    required_answer_role: "Developer"
+    consecutive_votes: 1
+    proposal_validity_rounds: 2
+
+  # ── 记忆更新策略配置 ──
+  # 可用策略:
+  #   ledger  — 共享 ledger 记忆，注入 ledger 摘要与 current_answer（P2P 推荐）
+  #   default — 默认记忆更新
+  memory:
+    strategy: ledger
+    query_policy: relevant_plus_pending  # full | relevant_plus_pending | minimal
+
+  # ── 全局配置 ──
+  max_rounds: 10
+  verbose: true
+  # initial_goal: null  # 首轮初始目标（覆盖默认的 "Analyze the problem..."）

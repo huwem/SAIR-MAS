@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Experiment outputs
+experiment_results/
+
+# Model files (large)
+models/
+
+# Environment variables
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# pytest
+.pytest_cache/
+
+# Large dataset files (download separately, see README)
+datasets/livecodebench/*.jsonl
+
+nohup.out

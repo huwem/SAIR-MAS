@@ -1,0 +1,154 @@
+name: sair_dose_r1t70_reasoning_local
+description: SRAC dose ceiling — at most 1 completion per round, relatedness threshold 0.70
+dataset:
+  loader: math
+  path: datasets/math/test.jsonl
+  limit: null
+  offset: 0
+  random_offset: false
+evaluation:
+  metric: llm_judge
+  metric_params:
+    model: deepseek-v4-flash
+    api_key: ${OPENAI_API_KEY}
+    base_url: ${OPENAI_BASE_URL}
+    temperature: 0.3
+    max_tokens: 256
+output:
+  dir: null
+  formats: [json, csv]
+  trace: true
+
+framework:
+  llm:
+    provider: openai_compat
+    model: qwen3-8b
+    api_key: sk-placeholder
+    base_url: http://127.0.0.1:8001/v1
+    temperature: 0.3
+    max_tokens: 32000
+    json_mode: true
+
+  agents:
+    - type: LLMAgent
+      name: ProblemParser
+      role: Math Problem Analyst
+      system_prompt: |
+        You are ProblemParser, the Math Problem Analyst.
+        Analyze the problem statement, identify known conditions, define the solving target,
+        and break down the solving steps.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "private_routing": [{
+            "recipients": ["<team member name; route to specific team members only, never broadcast>"],
+            "illocution": "<Directive | Assertive | Commissive | Expressive | Declarative>",
+            "content": "<message to team member>",
+            "answer_correct": "<Boolean; vote on [answer_from_solver] value only. True if it correctly answers the problem.>"
+          }]
+        }
+
+        CRITICAL RULES:
+        1. Primary focus: Analyze problem, identify conditions, define target, break down steps.
+        2. Constraint: MAX 1000 words. Output MUST include clear analysis and plan.
+        3. Analyze mathematical expressions from your role's perspective.
+        4. Make illocution concrete and semantically meaningful.
+      output_format: json
+      required_output_fields: [private_routing]
+      context_fields: [current_answer]
+
+    - type: LLMAgent
+      name: Solver
+      role: Mathematical Solver
+      system_prompt: |
+        You are Solver, the Mathematical Solver.
+        Execute mathematical calculations, symbolic reasoning, or apply theorems.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "private_routing": [{
+            "recipients": ["<team member name; route to specific team members only, never broadcast>"],
+            "illocution": "<Directive | Assertive | Commissive | Expressive | Declarative>",
+            "content": "<message to team member>",
+            "answer_correct": "<Boolean; vote on [answer_from_solver] value only. True if it correctly answers the problem.>"
+          }],
+          "answer": "<non-empty; final answer in standard LaTeX; must be the answer required by the question.>"
+        }
+
+        CRITICAL RULES:
+        1. Primary focus: Calculations, symbolic reasoning, theorem calls.
+        2. Constraint: MAX 2000 words. Detailed step-by-step solutions required.
+        3. Make illocution concrete and semantically meaningful.
+      output_format: json
+      required_output_fields: [private_routing, answer]
+      context_fields: [current_answer]
+
+    - type: LLMAgent
+      name: Verifier
+      role: Logic Verifier
+      tools: [run_python]
+      max_tool_rounds: 1
+      system_prompt: |
+        You are Verifier, the Logic Verifier.
+        Verify each derivation step, identify logical gaps or calculation errors.
+        
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "private_routing": [{
+            "recipients": ["<team member name; route to specific team members only, never broadcast>"],
+            "illocution": "<Directive | Assertive | Commissive | Expressive | Declarative>",
+            "content": "<message to team member>",
+            "answer_correct": "<Boolean; vote on [answer_from_solver] value only. True if it correctly answers the problem.>"
+          }]
+        }
+
+        CRITICAL RULES:
+        1. Primary focus: Verify derivation steps, find logical gaps/errors.
+        2. Constraint: MAX 1000 words. Output verification for each step.
+        3. Make illocution concrete and semantically meaningful.
+      output_format: json
+      required_output_fields: [private_routing]
+      context_fields: [current_answer]
+
+  topology:
+    strategy: neighbor
+    agent_neighbor_map:
+      ProblemParser: [Solver, Verifier]
+      Solver: [ProblemParser, Verifier]
+      Verifier: [ProblemParser, Solver]
+
+  routing:
+    strategy: tlsg_routing
+    neighbor_policy: strict
+    memory_truncate: 0
+    first_round_exclude: [Verifier]   # 首轮只激活非验证角色（验证角色首轮尚无产出可验证）
+    srac_config:
+      max_completions_per_round: 1
+      mode: always
+      similarity_threshold: 0.70
+      max_history_rounds: 10
+      auto_close_rounds: 3
+      allowed_illocutions: [Assertive, Expressive, Declarative]
+      model: sentence-transformers/all-MiniLM-L6-v2
+      device: cpu
+      batch_size: 32
+      semantic_polarity:
+        unrelated_threshold: 0.35
+
+  decision:
+    strategy: tlsg_consensus
+    min_health: 0.3
+    required_true_voters: [Verifier]
+
+  memory:
+    strategy: tlsg_memory
+    inject_ledger_summary: abnormal_only
+    tool_memory_mode: result_only
+    memory_max_rounds: 3
+    memory_limit: 0
+
+  max_rounds: 10
+  verbose: true

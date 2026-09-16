@@ -1,0 +1,57 @@
+# python scripts/run_experiment_matrix.py --method vanilla --dataset humaneval --dataset-path datasets/humaneval/humaneval_hard_errors.jsonl   --model deepseek --batch-size 5 
+# 
+
+name: vanilla_code_local
+description: Code tasks with vanilla single-agent baseline on local model
+dataset:
+  loader: humaneval
+  path: datasets/humaneval/humaneval-py.jsonl
+  limit: null
+  offset: 0
+  random_offset: false
+evaluation:
+  metric: code_execution
+  metric_params:
+    extract_code: true
+output:
+  dir: null
+  formats: [json, csv]
+  trace: true
+framework:
+  llm:
+    provider: openai_compat
+    model: llama3-8b
+    api_key: sk-placeholder
+    base_url: http://127.0.0.1:8000/v1
+    temperature: 0.3
+    max_tokens: 32000
+    json_mode: true
+  agents:
+    - type: LLMAgent
+      name: Developer
+      role: Code Developer
+      system_prompt: |
+        Implement the given Python function.
+
+        Output ONLY a JSON object:
+        {
+          "answer": "<complete runnable Python code with imports>"
+        }
+      output_format: json
+      required_output_fields: [answer]
+      memory_max_rounds: 1
+      memory_limit: 2000
+      context_fields: [current_answer]
+  topology:
+    strategy: fixed
+    pattern: direct_answer
+  routing:
+    strategy: broadcast
+    memory_truncate: 3000
+  decision:
+    strategy: direct
+    max_rounds: 1
+  memory:
+    strategy: message_log
+  max_rounds: 1
+  verbose: true

@@ -1,0 +1,151 @@
+name: dytopo_reasoning_local
+description: Reasoning tasks with DyTopo semantic topology on local model (paper-aligned prompts)
+dataset:
+  loader: aime
+  path: datasets/aime/aime_*.jsonl
+  limit: null
+  offset: 0
+  random_offset: false
+evaluation:
+  metric: llm_judge
+  metric_params:
+    model: deepseek-v4-flash
+    api_key: ${OPENAI_API_KEY}
+    base_url: ${OPENAI_BASE_URL}
+    temperature: 0.0
+    max_tokens: 256
+output:
+  dir: null
+  formats: [json, csv]
+  trace: true
+framework:
+  llm:
+    provider: openai_compat
+    model: llama3-8b
+    api_key: sk-placeholder
+    base_url: http://127.0.0.1:8000/v1
+    temperature: 0.3
+    max_tokens: 32000
+    json_mode: true
+  agents:
+    - type: LLMAgent
+      name: Manager
+      role: Workflow Orchestrator
+      system_prompt: |
+        You are Manager, the Workflow Orchestrator.
+        Decide if the task is COMPLETE.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "public_content": "String. Status summary.",
+          "private_content": {"Role": "Instruction"},
+          "q_vector": "String.",
+          "k_vector": "String.",
+          "is_complete": Boolean,
+          "next_goal": "String"
+        }
+
+        CRITICAL RULES:
+        1. Completion criterion: Set is_complete=True when a detailed, step-by-step solution has been provided and the Verifier has described a review of the reasoning. The Manager cannot independently verify every calculation; judge completion based on clarity and logical soundness.
+        2. Avoid endless refinement: if the solution has been stable for one or two rounds and looks correct, mark the task complete.
+      output_format: json
+      required_output_fields: [public_content, q_vector, k_vector, is_complete, next_goal]
+      memory_max_rounds: 5
+      memory_limit: 1500
+
+    - type: LLMAgent
+      name: ProblemParser
+      role: Math Problem Analyst
+      system_prompt: |
+        You are ProblemParser, the Math Problem Analyst.
+        Analyze the problem statement, identify known conditions, define the solving target,
+        and break down the solving steps.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "public_content": "String. Analysis, conditions, target, and plan.",
+          "private_content": {"Role": "Instruction"},
+          "q_vector": "String. REQUIRED. What you need next.",
+          "k_vector": "String. REQUIRED. What you provide."
+        }
+
+        CRITICAL RULES:
+        1. Primary focus: Analyze problem, identify conditions, define target, break down steps.
+        2. Constraint: MAX 1000 words. Output MUST include clear analysis and plan.
+        3. Analyze mathematical expressions from your role's perspective.
+      output_format: json
+      required_output_fields: [public_content, q_vector, k_vector]
+      memory_max_rounds: 5
+      memory_limit: 1500
+
+    - type: LLMAgent
+      name: Solver
+      role: Mathematical Solver
+      system_prompt: |
+        You are Solver, the Mathematical Solver.
+        Execute specific mathematical calculations, symbolic reasoning, or theorem calls.
+        Can use SymPy for symbolic computations.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "public_content": "String. Detailed solutions with derivations.",
+          "private_content": {"Role": "Instruction"},
+          "answer": "String. The final answer.",
+          "q_vector": "String. REQUIRED.",
+          "k_vector": "String. REQUIRED."
+        }
+
+        CRITICAL RULES:
+        1. Primary focus: Calculations, symbolic reasoning, theorem calls.
+        2. Constraint: MAX 2000 words. Detailed step-by-step solutions required.
+      output_format: json
+      required_output_fields: [public_content, q_vector, k_vector, answer]
+      memory_max_rounds: 5
+      memory_limit: 2000
+      context_fields: [current_answer]
+
+    - type: LLMAgent
+      name: Verifier
+      role: Logic Verifier
+      system_prompt: |
+        You are Verifier, the Logic Verifier.
+        Check the rationality of each derivation step, identify logical loopholes or
+        calculation errors.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "public_content": "String. Verification results and conclusion.",
+          "private_content": {"Role": "Instruction"},
+          "q_vector": "String. REQUIRED.",
+          "k_vector": "String. REQUIRED."
+        }
+
+        CRITICAL RULES:
+        1. Primary focus: Check rationality, find loopholes/errors.
+        2. Constraint: MAX 1000 words. Output verification for each step.
+      output_format: json
+      required_output_fields: [public_content, q_vector, k_vector]
+      memory_max_rounds: 5
+      memory_limit: 2000
+
+  topology:
+    strategy: semantic
+    threshold: 0.3
+    max_in_degree: 3
+    embedding_model: all-MiniLM-L6-v2
+    manager_name: Manager
+  routing:
+    strategy: semantic
+    memory_truncate: 500
+    manager_name: Manager
+  decision:
+    strategy: manager
+    manager_name: Manager
+  memory:
+    strategy: default
+  max_rounds: 10
+  verbose: true

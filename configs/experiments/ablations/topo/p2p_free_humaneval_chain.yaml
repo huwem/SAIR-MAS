@@ -1,0 +1,137 @@
+dataset:
+  limit: null
+  loader: humaneval
+  offset: 0
+  path: datasets/humaneval/humaneval-py.jsonl
+  random_offset: false
+description: HUMANEVAL with P2P Free-Talk — chain topology
+evaluation:
+  metric: code_execution
+  metric_params:
+    extract_code: true
+framework:
+  agents:
+  - context_fields:
+    - current_answer
+    memory_limit: 2000
+    memory_max_rounds: 3
+    name: Developer
+    output_format: json
+    required_output_fields:
+    - private_routing
+    - answer
+    role: Code Developer
+    system_prompt: "You are Developer, the Code Developer.\nRole Description:\nProduce\
+      \ complete, runnable Python code in the 'answer' field and coordinate with peers\
+      \ via private_routing.\n\nSTRICT RESPONSE FORMAT - MANDATORY\nYou MUST output\
+      \ ONLY a valid JSON object with these exact fields:\n{\n  \"private_routing\"\
+      : [{\"recipients\": [\"<name>\"], \"content\": \"<message to peer>\", \"vote_complete\"\
+      : <bool>}],\n  \"answer\": \"<complete runnable Python code with imports>\"\n\
+      }\n\nROUTING RULES:\n1. Use private_routing to send targeted messages to specific\
+      \ peers.\n   Each recipient must have a specific reason — do not broadcast to\
+      \ everyone.\n2. Set vote_complete=true when you are sure task done.\n"
+    type: LLMAgent
+  - context_fields:
+    - current_answer
+    memory_limit: 1500
+    memory_max_rounds: 3
+    name: Researcher
+    output_format: json
+    required_output_fields:
+    - private_routing
+    role: Algorithm Researcher
+    system_prompt: "You are Researcher, the Algorithm Researcher.\nRole Description:\n\
+      Analyze algorithm choice, complexity, and edge cases. Advise the Developer;\
+      \ do not write code.\n\nSTRICT RESPONSE FORMAT - MANDATORY\nYou MUST output\
+      \ ONLY a valid JSON object with these exact fields:\n{\n  \"private_routing\"\
+      : [{\"recipients\": [\"<name>\"], \"content\": \"<message to peer>\", \"vote_complete\"\
+      : <bool>}]\n}\n\nROUTING RULES:\n1. Use private_routing to send targeted messages\
+      \ to specific peers.\n   Each recipient must have a specific reason — do not\
+      \ broadcast to everyone.\n2. Do NOT write the full implementation — advise on\
+      \ algorithms and edge cases only.\n3. Set vote_complete=true when you are sure\
+      \ task done.\n"
+    type: LLMAgent
+  - context_fields:
+    - current_answer
+    memory_limit: 1500
+    memory_max_rounds: 3
+    name: Designer
+    output_format: json
+    required_output_fields:
+    - private_routing
+    role: API Designer
+    system_prompt: "You are Designer, the API Designer.\nRole Description:\nDefine\
+      \ function signatures, input/output contracts, and type hints. Do not write\
+      \ code.\n\nSTRICT RESPONSE FORMAT - MANDATORY\nYou MUST output ONLY a valid\
+      \ JSON object with these exact fields:\n{\n  \"private_routing\": [{\"recipients\"\
+      : [\"<name>\"], \"content\": \"<message to peer>\", \"vote_complete\": <bool>}]\n\
+      }\n\nROUTING RULES:\n1. Use private_routing to send targeted messages to specific\
+      \ peers.\n   Each recipient must have a specific reason — do not broadcast to\
+      \ everyone.\n2. Do NOT write the full implementation — define signatures and\
+      \ contracts only.\n3. Set vote_complete=true when you are sure task done.\n"
+    type: LLMAgent
+  - context_fields:
+    - current_answer
+    memory_limit: 2000
+    memory_max_rounds: 3
+    name: Tester
+    output_format: json
+    required_output_fields:
+    - private_routing
+    role: Code Tester
+    system_prompt: "You are Tester, the Code Tester.\nRole Description:\nDesign comprehensive\
+      \ tests and run them with run_python. Do not write code.\n\nSTRICT RESPONSE\
+      \ FORMAT - MANDATORY\nYou MUST output ONLY a valid JSON object with these exact\
+      \ fields:\n{\n  \"private_routing\": [{\"recipients\": [\"<name>\"], \"content\"\
+      : \"<message to peer>\", \"vote_complete\": <bool>}]\n}\n\nROUTING RULES:\n\
+      1. Use private_routing to send targeted messages to specific peers.\n   Each\
+      \ recipient must have a specific reason — do not broadcast to everyone.\n2.\
+      \ Design tests beyond docstring examples, covering edge cases and boundary values.\n\
+      3. Run all tests with run_python. If tests fail, send the exact failure details\
+      \ to Developer.\n4. Set vote_complete=true only when run_python reports all\
+      \ tests passing.\n"
+    tools:
+    - run_python
+    max_tool_rounds: 1
+    type: LLMAgent
+  decision:
+    strategy: consensus
+  llm:
+    api_key: sk-placeholder
+    base_url: http://127.0.0.1:8001/v1
+    json_mode: true
+    thinking_budget: 16000
+    max_tokens: 32000
+    model: qwen3-8b
+    provider: openai_compat
+    temperature: 0.3
+  max_rounds: 10
+  memory:
+    inject_ledger_summary: abnormal_only
+    strategy: ledger
+    tool_memory_mode: result_only
+  routing:
+    memory_truncate: 1500
+    neighbor_policy: strict
+    strategy: self_routing
+  topology:
+    agent_neighbor_map:
+      Designer:
+      - Researcher
+      - Tester
+      Developer:
+      - Researcher
+      Researcher:
+      - Developer
+      - Designer
+      Tester:
+      - Designer
+    strategy: neighbor
+  verbose: true
+name: p2p_free_humaneval_chain
+output:
+  dir: null
+  formats:
+  - json
+  - csv
+  trace: true

@@ -1,0 +1,128 @@
+name: autogen_reasoning_local
+description: Reasoning tasks with AutoGen GroupChat (original v0.2 GroupChatManager protocol) baseline
+dataset:
+  loader: math
+  path: datasets/math/test.jsonl
+  limit: null
+  offset: 0
+  random_offset: false
+evaluation:
+  metric: llm_judge
+  metric_params:
+    model: deepseek-v4-flash
+    api_key: ${OPENAI_API_KEY}
+    base_url: ${OPENAI_BASE_URL}
+    temperature: 0.3
+    max_tokens: 256
+output:
+  dir: null
+  formats: [json, csv]
+  trace: true
+
+framework:
+  llm:
+    provider: openai_compat
+    model: qwen3-8b
+    api_key: sk-placeholder
+    base_url: http://127.0.0.1:8001/v1
+    temperature: 0.3
+    max_tokens: 32000
+    json_mode: true
+
+  agents:
+    # Manager 只是 GroupChatManager 的 LLM 载体：原版协议中它不在群聊
+    # transcript 中产出内容，发言人选择 prompt 由 decision 策略
+    # （autogen_manager）按原版 select_speaker 模板现场构造。
+    - type: LLMAgent
+      name: Manager
+      role: Group Chat Orchestrator
+      system_prompt: |
+        You are the GroupChatManager. You do not participate in the
+        conversation; you only select the next speaker.
+      output_format: text
+      memory_max_rounds: 10
+      memory_limit: 4000
+
+    - type: LLMAgent
+      name: ProblemParser
+      role: Math Problem Analyst
+      system_prompt: |
+        You are ProblemParser, the Math Problem Analyst.
+        Analyze the problem statement, identify known conditions, define the solving target,
+        and break down the solving steps.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "public_content": "<analysis, conditions, target, and plan>"
+        }
+      output_format: json
+      required_output_fields: [public_content]
+      memory_max_rounds: 5
+      memory_limit: 1500
+
+    - type: LLMAgent
+      name: Solver
+      role: Mathematical Solver
+      system_prompt: |
+        You are Solver, the Mathematical Solver.
+        Execute mathematical calculations, symbolic reasoning, or apply theorems.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "public_content": "<detailed step-by-step solution>",
+          "answer": "<non-empty; final answer in standard LaTeX; must be the answer required by the question.>"
+        }
+      output_format: json
+      required_output_fields: [public_content, answer]
+      memory_max_rounds: 5
+      memory_limit: 2000
+      context_fields: [current_answer]
+
+    - type: LLMAgent
+      name: Verifier
+      role: Logic Verifier
+      tools: [run_python]
+      max_tool_rounds: 1
+      system_prompt: |
+        You are Verifier, the Logic Verifier.
+        Verify each derivation step, identify logical gaps or calculation errors.
+
+        If and only if you have verified that the current final answer is CORRECT,
+        append the exact token TERMINATE at the very end of your public_content.
+        Never output TERMINATE otherwise.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "public_content": "<verification results and conclusion: whether the current answer is correct. If and only if the current answer is CORRECT, this string MUST end with the exact token TERMINATE; otherwise it MUST NOT contain TERMINATE.>"
+        }
+      output_format: json
+      required_output_fields: [public_content]
+      memory_max_rounds: 5
+      memory_limit: 2000
+
+  topology:
+    strategy: fixed
+    pattern: full_connected
+
+  routing:
+    strategy: autogen_groupchat
+    role_order: [ProblemParser, Solver, Verifier]
+    fallback_mode: round_robin
+    include_manager: true
+
+  decision:
+    strategy: autogen_manager
+    manager_name: Manager
+    termination_keyword: TERMINATE   # 原版 is_termination_msg：发言人消息含此令牌即终止
+    require_worker_answer: true      # 无 Worker 产出 answer 前忽略 TERMINATE（防退化空终止）
+    max_selection_retries: 2         # 原版 max_retries_for_selecting_speaker 默认值
+    selector_json_mode: true         # 偏差：选择走 json_object 通道（规避网关文本通道故障）；false 恢复原版纯文本
+
+  memory:
+    strategy: default
+
+  max_rounds: 10
+  verbose: true

@@ -1,0 +1,175 @@
+name: dytopo_code_local
+description: Code tasks with DyTopo semantic topology on local model (paper-aligned prompts)
+dataset:
+  loader: humaneval
+  path: datasets/humaneval/humaneval-py.jsonl
+  limit: null
+  offset: 0
+  random_offset: false
+evaluation:
+  metric: code_execution
+  metric_params:
+    extract_code: true
+output:
+  dir: null
+  formats: [json, csv]
+  trace: true
+framework:
+  llm:
+    provider: openai_compat
+    model: llama3-8b
+    api_key: sk-placeholder
+    base_url: http://127.0.0.1:8000/v1
+    temperature: 0.3
+    max_tokens: 32000
+    json_mode: true
+  agents:
+    - type: LLMAgent
+      name: Manager
+      role: Workflow Orchestrator
+      system_prompt: |
+        You are Manager, the Workflow Orchestrator.
+        Decide if the task is COMPLETE.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "public_content": "String. Status summary and next directives.",
+          "private_content": {},  // No successors for manager
+          "q_desc": "String. REQUIRED. What you need next (query descriptor).",
+          "k_desc": "String. REQUIRED. What you provide (key descriptor).",
+          "is_complete": Boolean,
+          "next_goal": "String"
+        }
+
+        CRITICAL RULES:
+        1. Primary focus: Workflow Orchestrator. Decide if the task is COMPLETE.
+        2. Completion criterion: Set is_complete=True when a concrete, runnable code solution has been provided and the Tester has described test cases covering the problem requirements. The Manager cannot execute tests externally; judge completion based on the completeness and soundness of the proposed solution and tests.
+        3. Avoid endless refinement: if the solution has been stable for one or two rounds and looks correct, mark the task complete.
+        4. If you see Python code, analyze it from your role's perspective.
+      output_format: json
+      required_output_fields: [public_content, private_content, q_desc, k_desc, is_complete, next_goal]
+      memory_max_rounds: 5
+      memory_limit: 1500
+
+    - type: LLMAgent
+      name: Developer
+      role: Code Developer
+      system_prompt: |
+        You are Developer, the Code Developer.
+        Role Description:
+        Implement complete, runnable code. If using classes, provide independent functions as entry points.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "public_content": "String. Your contribution to the task.",
+          "private_content": {"TargetRole": "Instruction"},
+          "answer": "<complete runnable Python code with imports>",
+          "q_vector": "String. REQUIRED. What you need next (Query).",
+          "k_vector": "String. REQUIRED. What you provide (Key)."
+        }
+
+        CRITICAL RULES:
+        1. 'answer' must contain a complete, runnable Python snippet.
+        2. Make q_vector and k_vector concrete and semantically meaningful so the Manager can route correctly.
+      output_format: json
+      required_output_fields: [public_content, q_vector, k_vector, answer]
+      memory_max_rounds: 5
+      memory_limit: 2000
+      context_fields: [current_answer]
+
+    - type: LLMAgent
+      name: Researcher
+      role: Algorithm Researcher
+      system_prompt: |
+        You are Researcher, the Algorithm Researcher.
+        Role Description:
+        Identify standard algorithms and time complexity. Output conclusions without derivation.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "public_content": "String. Your contribution to the task.",
+          "private_content": {"TargetRole": "Instruction"},
+          "q_vector": "String. REQUIRED. What you need next (Query).",
+          "k_vector": "String. REQUIRED. What you provide (Key)."
+        }
+
+        CRITICAL RULES:
+        1. Do NOT write the full implementation.
+        2. Make q_vector and k_vector concrete and semantically meaningful.
+      output_format: json
+      required_output_fields: [public_content, q_vector, k_vector]
+      memory_max_rounds: 5
+      memory_limit: 1500
+
+    - type: LLMAgent
+      name: Designer
+      role: API Designer
+      system_prompt: |
+        You are Designer, the API Designer.
+        Role Description:
+        Design API interfaces and class structures. Only show method signatures and type hints.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "public_content": "String. Your contribution to the task.",
+          "private_content": {"TargetRole": "Instruction"},
+          "q_vector": "String. REQUIRED. What you need next (Query).",
+          "k_vector": "String. REQUIRED. What you provide (Key)."
+        }
+
+        CRITICAL RULES:
+        1. Do NOT write the full implementation.
+        2. Make q_vector and k_vector concrete and semantically meaningful.
+      output_format: json
+      required_output_fields: [public_content, q_vector, k_vector]
+      memory_max_rounds: 5
+      memory_limit: 1500
+
+    - type: LLMAgent
+      name: Tester
+      role: Code Tester
+      system_prompt: |
+        You are Tester, the Code Tester.
+        Role Description:
+        Provide critical test cases and expected results. Describe testing logic rather than full execution logs.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "public_content": "String. Your contribution to the task.",
+          "private_content": {"TargetRole": "Instruction"},
+          "q_vector": "String. REQUIRED. What you need next (Query).",
+          "k_vector": "String. REQUIRED. What you provide (Key)."
+        }
+
+        CRITICAL RULES:
+        1. Provide critical test cases and expected results. Describe testing logic rather than full execution logs.
+        2. Do NOT write the function implementation yourself.
+        3. Make q_vector and k_vector concrete and semantically meaningful.
+      output_format: json
+      required_output_fields: [public_content, q_vector, k_vector]
+      memory_max_rounds: 5
+      memory_limit: 2000
+      context_fields: [current_answer]
+
+  topology:
+    strategy: semantic
+    threshold: 0.3
+    max_in_degree: 3
+    embedding_model: all-MiniLM-L6-v2
+    manager_name: Manager
+  routing:
+    strategy: semantic
+    memory_truncate: 500
+    manager_name: Manager
+  decision:
+    strategy: manager
+    manager_name: Manager
+  memory:
+    strategy: default
+  max_rounds: 10
+  verbose: true

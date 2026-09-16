@@ -1,0 +1,156 @@
+name: p2p_free_code_local
+description: Code tasks with P2P Free-Talk — no illocution, pure P2P self-routing + consensus (local model)
+dataset:
+  loader: humaneval
+  path: datasets/humaneval/humaneval-py.jsonl
+  limit: null
+  offset: 0
+  random_offset: false
+evaluation:
+  metric: code_execution
+  metric_params:
+    extract_code: true
+output:
+  dir: null
+  formats: [json, csv]
+  trace: true
+
+framework:
+  llm:
+    provider: openai_compat
+    model: qwen3-8b
+    api_key: sk-placeholder
+    base_url: http://127.0.0.1:8001/v1
+    temperature: 0.3
+    max_tokens: 32000
+    json_mode: true
+
+  agents:
+    - type: LLMAgent
+      name: Developer
+      role: Code Developer
+      system_prompt: |
+        You are Developer, the Code Developer.
+        Role Description:
+        Produce complete, runnable Python code in the 'answer' field and coordinate with team members via private_routing.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "private_routing": [{"recipients": ["<name>"], "content": "<message to team member>", "vote_complete": <bool>}],
+          "answer": "<non-empty; complete runnable Python code with imports>"
+        }
+
+        ROUTING RULES:
+        1. Use private_routing to send targeted messages to specific team members.
+           Each recipient must have a specific reason — do not broadcast to everyone.
+        2. Set vote_complete=true when you are sure task done.
+      output_format: json
+      required_output_fields: [private_routing, answer]
+      context_fields: [current_answer]
+      memory_max_rounds: 3
+      memory_limit: 2000
+
+    - type: LLMAgent
+      name: Researcher
+      role: Algorithm Researcher
+      system_prompt: |
+        You are Researcher, the Algorithm Researcher.
+        Role Description:
+        Analyze algorithm choice, complexity, and edge cases. Advise the Developer; do not write code.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "private_routing": [{"recipients": ["<name>"], "content": "<message to team member>", "vote_complete": <bool>}]
+        }
+
+        ROUTING RULES:
+        1. Use private_routing to send targeted messages to specific team members.
+           Each recipient must have a specific reason — do not broadcast to everyone.
+        2. Do NOT write the full implementation — advise on algorithms and edge cases only.
+        3. Set vote_complete=true when you are sure task done.
+      output_format: json
+      required_output_fields: [private_routing]
+      context_fields: [current_answer]
+      memory_max_rounds: 3
+      memory_limit: 1500
+
+    - type: LLMAgent
+      name: Designer
+      role: API Designer
+      system_prompt: |
+        You are Designer, the API Designer.
+        Role Description:
+        Define function signatures, input/output contracts, and type hints. Do not write code.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "private_routing": [{"recipients": ["<name>"], "content": "<message to team member>", "vote_complete": <bool>}]
+        }
+
+        ROUTING RULES:
+        1. Use private_routing to send targeted messages to specific team members.
+           Each recipient must have a specific reason — do not broadcast to everyone.
+        2. Do NOT write the full implementation — define signatures and contracts only.
+        3. Set vote_complete=true when you are sure task done.
+      output_format: json
+      required_output_fields: [private_routing]
+      context_fields: [current_answer]
+      memory_max_rounds: 3
+      memory_limit: 1500
+
+    - type: LLMAgent
+      name: Tester
+      role: Code Tester
+      tools: [run_python]
+      max_tool_rounds: 1
+      system_prompt: |
+        You are Tester, the Code Tester.
+        Role Description:
+        Design comprehensive tests and run them with run_python. Do not write code.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "private_routing": [{"recipients": ["<name>"], "content": "<message to team member>", "vote_complete": <bool>}]
+        }
+
+        ROUTING RULES:
+        1. Use private_routing to send targeted messages to specific team members.
+           Each recipient must have a specific reason — do not broadcast to everyone.
+        2. Design tests beyond docstring examples, covering edge cases and boundary values.
+        3. Run all tests with run_python. If tests fail, send the exact failure details to Developer.
+        4. Set vote_complete=true only when run_python reports all tests passing.
+      output_format: json
+      required_output_fields: [private_routing]
+      context_fields: [current_answer]
+      memory_max_rounds: 3
+      memory_limit: 2000
+
+  topology:
+    strategy: neighbor
+    agent_neighbor_map:
+      Developer: [Researcher, Designer, Tester]
+      Researcher: [Developer, Designer, Tester]
+      Designer: [Developer, Researcher, Tester]
+      Tester: [Developer, Researcher, Designer]
+
+  routing:
+    strategy: self_routing
+    neighbor_policy: strict
+    memory_truncate: 1500
+
+  decision:
+    strategy: tlsg_consensus
+    min_health: 0.3
+    required_true_voters: [Tester]
+
+  memory:
+    strategy: ledger
+    inject_ledger_summary: abnormal_only
+    tool_memory_mode: result_only
+
+  max_rounds: 10
+  verbose: true

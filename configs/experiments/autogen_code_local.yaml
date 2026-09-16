@@ -1,0 +1,144 @@
+name: autogen_code_local
+description: Code tasks with AutoGen GroupChat (original v0.2 GroupChatManager protocol) baseline
+dataset:
+  loader: humaneval
+  path: datasets/humaneval/humaneval-py.jsonl
+  limit: null
+  offset: 0
+  random_offset: false
+evaluation:
+  metric: code_execution
+  metric_params:
+    extract_code: true
+output:
+  dir: null
+  formats: [json, csv]
+  trace: true
+
+framework:
+  llm:
+    provider: openai_compat
+    model: qwen3-8b
+    api_key: sk-placeholder
+    base_url: http://127.0.0.1:8001/v1
+    temperature: 0.3
+    max_tokens: 32000
+    json_mode: true
+
+  agents:
+    # Manager 只是 GroupChatManager 的 LLM 载体：原版协议中它不在群聊
+    # transcript 中产出内容，发言人选择 prompt 由 decision 策略
+    # （autogen_manager）按原版 select_speaker 模板现场构造。
+    - type: LLMAgent
+      name: Manager
+      role: Group Chat Orchestrator
+      system_prompt: |
+        You are the GroupChatManager. You do not participate in the
+        conversation; you only select the next speaker.
+      output_format: text
+      memory_max_rounds: 10
+      memory_limit: 4000
+
+    - type: LLMAgent
+      name: Researcher
+      role: Algorithm Researcher
+      system_prompt: |
+        You are Researcher, the Algorithm Researcher.
+        Identify standard algorithms, analyze time complexity and edge cases. Do not write code.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "public_content": "<algorithm choice, complexity analysis, and edge cases>"
+        }
+      output_format: json
+      required_output_fields: [public_content]
+      memory_max_rounds: 5
+      memory_limit: 1500
+
+    - type: LLMAgent
+      name: Designer
+      role: API Designer
+      system_prompt: |
+        You are Designer, the API Designer.
+        Design API interfaces and class structures. Only show method signatures,
+        input/output contracts, and type hints. Do not write code.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "public_content": "<method signatures, input/output contracts, and type hints>"
+        }
+      output_format: json
+      required_output_fields: [public_content]
+      memory_max_rounds: 5
+      memory_limit: 1500
+
+    - type: LLMAgent
+      name: Developer
+      role: Code Developer
+      system_prompt: |
+        You are Developer, the Code Developer.
+        Implement complete, runnable code with imports. If using classes, provide
+        independent functions as entry points. Ensure the code is self-contained
+        and handles edge cases.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "public_content": "<summary of your implementation>",
+          "answer": "<non-empty; complete runnable Python code with imports; must be the answer required by the question.>"
+        }
+      output_format: json
+      required_output_fields: [public_content, answer]
+      memory_max_rounds: 5
+      memory_limit: 2000
+      context_fields: [current_answer]
+
+    - type: LLMAgent
+      name: Tester
+      role: Code Tester
+      tools: [run_python]
+      max_tool_rounds: 1
+      system_prompt: |
+        You are Tester, the Code Tester.
+        Provide critical test cases (scenario, inputs, expected results, edges) and
+        run them via the run_python tool.
+
+        If and only if the current code passes all your tests, append the exact
+        token TERMINATE at the very end of your public_content.
+        Never output TERMINATE otherwise.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "public_content": "<test results and conclusion: whether the current code passes all tests. If and only if the code PASSES all tests, this string MUST end with the exact token TERMINATE; otherwise it MUST NOT contain TERMINATE.>"
+        }
+      output_format: json
+      required_output_fields: [public_content]
+      memory_max_rounds: 5
+      memory_limit: 2000
+
+  topology:
+    strategy: fixed
+    pattern: full_connected
+
+  routing:
+    strategy: autogen_groupchat
+    role_order: [Researcher, Designer, Developer, Tester]
+    fallback_mode: round_robin
+    include_manager: true
+
+  decision:
+    strategy: autogen_manager
+    manager_name: Manager
+    termination_keyword: TERMINATE   # 原版 is_termination_msg：发言人消息含此令牌即终止
+    require_worker_answer: true      # 无 Worker 产出 answer 前忽略 TERMINATE（防退化空终止）
+    max_selection_retries: 2         # 原版 max_retries_for_selecting_speaker 默认值
+    selector_json_mode: true         # 偏差：选择走 json_object 通道（规避网关文本通道故障）；false 恢复原版纯文本
+
+  memory:
+    strategy: default
+
+  max_rounds: 10
+  verbose: true

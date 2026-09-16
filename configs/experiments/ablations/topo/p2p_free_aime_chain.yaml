@@ -1,0 +1,118 @@
+dataset:
+  limit: null
+  loader: aime
+  offset: 0
+  path: datasets/aime/aime_*.jsonl
+  random_offset: false
+description: AIME with P2P Free-Talk — chain topology
+evaluation:
+  metric: llm_judge
+  metric_params:
+    api_key: ${OPENAI_API_KEY}
+    base_url: ${OPENAI_BASE_URL}
+    max_tokens: 256
+    model: deepseek-v4-flash
+    temperature: 0.3
+framework:
+  agents:
+  - memory_limit: 1500
+    memory_max_rounds: 3
+    name: ProblemParser
+    output_format: json
+    required_output_fields:
+    - private_routing
+    role: Math Problem Analyst
+    system_prompt: "You are ProblemParser, the Math Problem Analyst.\nRole Description:\n\
+      Analyze the math problem and break down solving steps. Do not solve fully.\n\
+      \nSTRICT RESPONSE FORMAT - MANDATORY\nYou MUST output ONLY a valid JSON object\
+      \ with these exact fields:\n{\n  \"private_routing\": [{\"recipients\": [\"\
+      <name>\"], \"content\": \"<message to peer>\", \"vote_complete\": <bool>}]\n\
+      }\n\nROUTING RULES:\n1. Use private_routing to send targeted messages to specific\
+      \ peers.\n   Each recipient must have a specific reason — do not broadcast to\
+      \ everyone.\n2. Do NOT provide the final answer.\n3. Set vote_complete=true\
+      \ when you are sure task done.\n"
+    type: LLMAgent
+  - context_fields:
+    - current_answer
+    memory_limit: 2000
+    memory_max_rounds: 3
+    name: Solver
+    tools:
+    - run_python
+    max_tool_rounds: 1
+    output_format: json
+    required_output_fields:
+    - private_routing
+    - answer
+    role: Mathematical Solver
+    system_prompt: "You are Solver, the Mathematical Solver.\nRole Description:\n\
+      Execute derivations and put only the final answer in the 'answer' field.\n\n\
+      STRICT RESPONSE FORMAT - MANDATORY\nYou MUST output ONLY a valid JSON object\
+      \ with these exact fields:\n{\n  \"private_routing\": [{\"recipients\": [\"\
+      <name>\"], \"content\": \"<message to peer>\", \"vote_complete\": <bool>}],\n\
+      \  \"answer\": \"<final answer in standard LaTeX>\"\n}\n\nROUTING RULES:\n1.\
+      \ Use private_routing to send targeted messages to specific peers.\n   Each\
+      \ recipient must have a specific reason — do not broadcast to everyone.\n2.\
+      \ 'answer' must contain only the final answer in standard LaTeX.\n3. Verify\
+      \ your interpretation of notation, units, edge cases, and required precision\
+      \ with peers via private_routing when uncertain.\n4. Set vote_complete=true\
+      \ when you are sure task done.\n"
+    type: LLMAgent
+  - context_fields:
+    - current_answer
+    memory_limit: 2000
+    memory_max_rounds: 3
+    name: Verifier
+    output_format: json
+    required_output_fields:
+    - private_routing
+    role: Logic Verifier
+    system_prompt: "You are Verifier, the Logic Verifier.\nRole Description:\nCheck\
+      \ the Solver's derivation and final answer. Reject if no answer is provided\
+      \ or reasoning is unsound.\n\nSTRICT RESPONSE FORMAT - MANDATORY\nYou MUST output\
+      \ ONLY a valid JSON object with these exact fields:\n{\n  \"private_routing\"\
+      : [{\"recipients\": [\"<name>\"], \"content\": \"<message to peer>\", \"vote_complete\"\
+      : <bool>}]\n}\n\nROUTING RULES:\n1. Use private_routing to send targeted messages\
+      \ to specific peers.\n   Each recipient must have a specific reason — do not\
+      \ broadcast to everyone.\n2. Review answer and reasoning before voting; set\
+      \ vote_complete=false if no answer.\n3. Set vote_complete=true when you are\
+      \ sure task done.\n"
+    type: LLMAgent
+  decision:
+    strategy: consensus
+  llm:
+    api_key: sk-placeholder
+    base_url: http://127.0.0.1:8001/v1
+    json_mode: true
+    thinking_budget: 16000
+    max_tokens: 32000
+    model: qwen3-8b
+    provider: openai_compat
+    temperature: 0.3
+  max_rounds: 10
+  memory:
+    inject_ledger_summary: abnormal_only
+    strategy: ledger
+    tool_memory_mode: result_only
+  routing:
+    memory_truncate: 1500
+    neighbor_policy: strict
+    strategy: self_routing
+  topology:
+    agent_neighbor_map:
+      ProblemParser:
+      - Solver
+      Solver:
+      - ProblemParser
+      - Verifier
+      Verifier:
+      - Solver
+    strategy: neighbor
+  verbose: true
+name: p2p_free_aime_chain
+output:
+  dir: null
+  formats:
+  - json
+  - csv
+  trace: true

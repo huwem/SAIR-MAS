@@ -1,0 +1,173 @@
+name: sair_humaneval_chain
+description: HumanEval with SAIR (TLSG + SRAC) — chain topology
+dataset:
+  loader: humaneval
+  path: datasets/humaneval/humaneval-py.jsonl
+  limit: null
+  offset: 0
+  random_offset: false
+evaluation:
+  metric: code_execution
+  metric_params:
+    extract_code: true
+output:
+  dir: null
+  formats: [json, csv]
+  trace: true
+
+framework:
+  llm:
+    provider: openai_compat
+    model: qwen3-8b
+    api_key: sk-placeholder
+    base_url: http://127.0.0.1:8001/v1
+    temperature: 0.3
+    max_tokens: 32000
+    json_mode: true
+
+  agents:
+    - type: LLMAgent
+      name: Developer
+      role: Code Developer
+      system_prompt: |
+        You are Developer, the Code Developer.
+        Implement complete, runnable code with imports. If using classes, provide independent functions as entry points. Ensure the code is self-contained and handles edge cases. Collaborate with team members.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "private_routing": [{
+            "recipients": ["<team member name; route to specific team members only, never broadcast>"],
+            "illocution": "<Directive | Assertive | Commissive | Expressive | Declarative>",
+            "content": "<message to team member>",
+            "answer_correct": "<Boolean; vote on [answer_from_developer] code only. True if it fully solves the problem.>"
+          }],
+          "answer": "<non-empty; complete runnable Python code with imports; must be the answer required by the question.>"
+        }
+
+        CRITICAL RULES:
+        1. 'answer' must contain a complete, runnable Python snippet.
+        2. Make illocution concrete and semantically meaningful.
+      output_format: json
+      required_output_fields: [private_routing, answer]
+      context_fields: [current_answer]
+
+    - type: LLMAgent
+      name: Researcher
+      role: Algorithm Researcher
+      system_prompt: |
+        You are Researcher, the Algorithm Researcher.
+        Identify standard algorithms, analyze time complexity and edge cases. Do not write code. Collaborate with team members.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "private_routing": [{
+            "recipients": ["<team member name; route to specific team members only, never broadcast>"],
+            "illocution": "<Directive | Assertive | Commissive | Expressive | Declarative>",
+            "content": "<message to team member>",
+            "answer_correct": "<Boolean; vote on [answer_from_developer] code only. True if it fully solves the problem.>"
+          }]
+        }
+
+        CRITICAL RULES:
+        1. Do NOT write the full implementation.
+        2. Make illocution concrete and semantically meaningful.
+      output_format: json
+      required_output_fields: [private_routing]
+      context_fields: [current_answer]
+
+    - type: LLMAgent
+      name: Designer
+      role: API Designer
+      system_prompt: |
+        You are Designer, the API Designer.
+        Design API interfaces and class structures. Only show method signatures, input/output contracts, and type hints. Do not write code. Collaborate with team members.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "private_routing": [{
+            "recipients": ["<team member name; route to specific team members only, never broadcast>"],
+            "illocution": "<Directive | Assertive | Commissive | Expressive | Declarative>",
+            "content": "<message to team member>",
+            "answer_correct": "<Boolean; vote on [answer_from_developer] code only. True if it fully solves the problem.>"
+          }]
+        }
+
+        CRITICAL RULES:
+        1. Do NOT write the full implementation. Show only method signatures and type hints.
+        2. Make illocution concrete and semantically meaningful.
+      output_format: json
+      required_output_fields: [private_routing]
+      context_fields: [current_answer]
+
+    - type: LLMAgent
+      name: Tester
+      role: Code Tester
+      tools: [run_python]
+      max_tool_rounds: 1
+      system_prompt: |
+        You are Tester, the Code Tester.
+        Provide critical test cases (scenario, inputs, expected results, edges) and run them via the run_python tool. Collaborate with team members.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "private_routing": [{
+            "recipients": ["<team member name; route to specific team members only, never broadcast>"],
+            "illocution": "<Directive | Assertive | Commissive | Expressive | Declarative>",
+            "content": "<message to team member>",
+            "answer_correct": "<Boolean; vote on [answer_from_developer] code only. True if it fully solves the problem.>"
+          }]
+        }
+
+        CRITICAL RULES:
+        1. Provide critical test cases and expected results. Describe testing logic rather than full execution logs.
+        2. Do NOT write the function implementation yourself.
+        3. Make illocution concrete and semantically meaningful.
+      output_format: json
+      required_output_fields: [private_routing]
+      context_fields: [current_answer]
+
+  # 与主实验（sair_code_local）唯一差异：全连 neighbor 改为链式
+  # Developer — Researcher — Designer — Tester
+  topology:
+    strategy: neighbor
+    agent_neighbor_map:
+      Developer: [Researcher]
+      Researcher: [Developer, Designer]
+      Designer: [Researcher, Tester]
+      Tester: [Designer]
+
+  routing:
+    strategy: tlsg_routing
+    neighbor_policy: strict
+    memory_truncate: 0
+    first_round_exclude: [Tester]   # 首轮只激活非验证角色（验证角色首轮尚无产出可验证）
+    srac_config:
+      mode: always
+      similarity_threshold: 0.50
+      max_history_rounds: 10
+      auto_close_rounds: 3
+      allowed_illocutions: [Assertive, Expressive, Declarative]
+      model: sentence-transformers/all-MiniLM-L6-v2
+      device: cpu
+      batch_size: 32
+      semantic_polarity:
+        unrelated_threshold: 0.35
+
+  decision:
+    strategy: tlsg_consensus
+    min_health: 0.3
+    required_true_voters: [Tester]
+
+  memory:
+    strategy: tlsg_memory
+    inject_ledger_summary: abnormal_only
+    tool_memory_mode: result_only
+    memory_max_rounds: 3
+    memory_limit: 0
+
+  max_rounds: 10
+  verbose: true

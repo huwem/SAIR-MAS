@@ -1,0 +1,134 @@
+name: p2p_free_reasoning_local
+description: Reasoning tasks with P2P Free-Talk — no illocution, pure P2P self-routing + consensus (local model)
+dataset:
+  loader: math
+  path: datasets/math/test.jsonl
+  limit: null
+  offset: 0
+  random_offset: false
+evaluation:
+  metric: llm_judge
+  metric_params:
+    model: deepseek-v4-flash
+    api_key: ${OPENAI_API_KEY}
+    base_url: ${OPENAI_BASE_URL}
+    temperature: 0.3
+    max_tokens: 256
+output:
+  dir: null
+  formats: [json, csv]
+  trace: true
+
+framework:
+  llm:
+    provider: openai_compat
+    model: qwen3-8b
+    api_key: sk-placeholder
+    base_url: http://127.0.0.1:8001/v1
+    temperature: 0.3
+    max_tokens: 32000
+    json_mode: true
+
+  agents:
+    - type: LLMAgent
+      name: ProblemParser
+      role: Math Problem Analyst
+      system_prompt: |
+        You are ProblemParser, the Math Problem Analyst.
+        Role Description:
+        Analyze the math problem and break down solving steps. Do not solve fully.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "private_routing": [{"recipients": ["<name>"], "content": "<message to team member>", "vote_complete": <bool>}]
+        }
+
+        ROUTING RULES:
+        1. Use private_routing to send targeted messages to specific team members.
+           Each recipient must have a specific reason — do not broadcast to everyone.
+        2. Do NOT provide the final answer.
+        3. Set vote_complete=true when you are sure task done.
+      output_format: json
+      required_output_fields: [private_routing]
+      memory_max_rounds: 3
+      memory_limit: 1500
+
+    - type: LLMAgent
+      name: Solver
+      role: Mathematical Solver
+      tools: [run_python]
+      max_tool_rounds: 1
+      system_prompt: |
+        You are Solver, the Mathematical Solver.
+        Role Description:
+        Execute derivations and put only the final answer in the 'answer' field.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "private_routing": [{"recipients": ["<name>"], "content": "<message to team member>", "vote_complete": <bool>}],
+          "answer": "<non-empty; final answer in standard LaTeX>"
+        }
+
+        ROUTING RULES:
+        1. Use private_routing to send targeted messages to specific team members.
+           Each recipient must have a specific reason — do not broadcast to everyone.
+        2. 'answer' must contain only the final answer in standard LaTeX.
+        3. Verify your interpretation of notation, units, edge cases, and required precision with team members via private_routing when uncertain.
+        4. Set vote_complete=true when you are sure task done.
+      output_format: json
+      required_output_fields: [private_routing, answer]
+      context_fields: [current_answer]
+      memory_max_rounds: 3
+      memory_limit: 2000
+
+    - type: LLMAgent
+      name: Verifier
+      role: Logic Verifier
+      system_prompt: |
+        You are Verifier, the Logic Verifier.
+        Role Description:
+        Check the Solver's derivation and final answer. Reject if no answer is provided or reasoning is unsound.
+
+        STRICT RESPONSE FORMAT - MANDATORY
+        You MUST output ONLY a valid JSON object with these exact fields:
+        {
+          "private_routing": [{"recipients": ["<name>"], "content": "<message to team member>", "vote_complete": <bool>}]
+        }
+
+        ROUTING RULES:
+        1. Use private_routing to send targeted messages to specific team members.
+           Each recipient must have a specific reason — do not broadcast to everyone.
+        2. Review answer and reasoning before voting; set vote_complete=false if no answer.
+        3. Set vote_complete=true when you are sure task done.
+      output_format: json
+      required_output_fields: [private_routing]
+      context_fields: [current_answer]
+      memory_max_rounds: 3
+      memory_limit: 2000
+
+  topology:
+    strategy: neighbor
+    agent_neighbor_map:
+      ProblemParser: [Solver, Verifier]
+      Solver: [ProblemParser, Verifier]
+      Verifier: [ProblemParser, Solver]
+
+  routing:
+    strategy: self_routing
+    neighbor_policy: strict
+    memory_truncate: 1500
+
+  decision:
+    strategy: tlsg_consensus
+    min_health: 0.3
+    required_true_voters: [Verifier]
+
+  memory:
+    strategy: ledger
+    inject_ledger_summary: abnormal_only
+    tool_memory_mode: result_only
+
+  max_rounds: 10
+  verbose: true
